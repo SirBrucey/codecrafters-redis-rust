@@ -8,9 +8,15 @@ fn main() {
         match stream {
             Ok(mut stream) => {
                 let mut buf = [0; 512];
-                stream.read(&mut buf).unwrap();
+                loop {
+                    let bytes = stream.read(&mut buf).unwrap();
 
-                stream.write(b"+PONG\r\n").unwrap();
+                    if bytes == 0 {
+                        break;
+                    }
+
+                    stream.write(b"+PONG\r\n").unwrap();
+                }
             }
             Err(e) => {
                 println!("error: {}", e);
