@@ -1,26 +1,9 @@
-use nom::bytes::complete::{tag, take_while1};
+use nom::bytes::complete::{is_not, tag};
+use nom::character::complete::{crlf, i64 as i64_parser};
 use nom::IResult;
 
-static CRLF: &[u8] = b"\r\n";
-
-fn is_cr(chr: u8) -> bool {
-    chr == b'\r'
-}
-
-fn is_lf(chr: u8) -> bool {
-    chr == b'\n'
-}
-
-fn is_cr_or_lf(chr: u8) -> bool {
-    is_cr(chr) || is_lf(chr)
-}
-
-fn not_cr_or_lf(chr: u8) -> bool {
-    !is_cr_or_lf(chr)
-}
-
 fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
-    let (input, s) = take_while1(not_cr_or_lf)(input)?;
+    let (input, s) = is_not("\r\n")(input)?;
     Ok((input, std::str::from_utf8(s).unwrap().to_string()))
 }
 
@@ -35,7 +18,7 @@ struct SimpleString(pub String);
 fn parse_simple_string(input: &[u8]) -> IResult<&[u8], SimpleString> {
     let (input, _) = tag(b"+")(input)?;
     let (input, s) = parse_string(input)?;
-    let (input, _) = tag(CRLF)(input)?;
+    let (input, _) = crlf(input)?;
     Ok((input, SimpleString(s)))
 }
 
@@ -54,10 +37,21 @@ struct SimpleError(pub String);
 fn parse_simple_error(input: &[u8]) -> IResult<&[u8], SimpleError> {
     let (input, _) = tag(b"-")(input)?;
     let (input, s) = parse_string(input)?;
-    let (input, _) = tag(CRLF)(input)?;
+    let (input, _) = crlf(input)?;
 
     Ok((input, SimpleError(s)))
 }
+
+/// Integers
+///
+/// This type is a CRLF-terminated string that represents a signed, base-10, 64-bit integer.
+fn parse_integer(input: &[u8]) -> IResult<&[u8], i64> {
+    let (input, _) = tag(b":")(input)?;
+    let (input, n) = i64_parser(input)?;
+    let (input, _) = crlf(input)?;
+    Ok((input, n))
+}
+
 
 mod tests {
     use super::*;
@@ -90,4 +84,31 @@ mod tests {
         assert_eq!(simple_string.0, "WRONGTYPE Operation against a key holding the wrong kind of value".to_string());
     }
 
+    #[test]
+    fn test_parse_integer_1() {
+        let (rest, int)  = parse_integer(b":0\r\n").unwrap();
+        assert_eq!(rest, b"");
+        assert_eq!(int, 0);
+    }
+
+    #[test]
+    fn test_parse_integer_2() {
+        let (rest, int)  = parse_integer(b":1000\r\n").unwrap();
+        assert_eq!(rest, b"");
+        assert_eq!(int, 1000);
+    }
+
+    #[test]
+    fn test_parse_integer_3() {
+        let (rest, int)  = parse_integer(b":-42\r\n").unwrap();
+        assert_eq!(rest, b"");
+        assert_eq!(int, -42);
+    }
+
+    #[test]
+    fn test_parse_integer_4() {
+        let (rest, int)  = parse_integer(b":+42\r\n").unwrap();
+        assert_eq!(rest, b"");
+        assert_eq!(int, 42);
+    }
 }
