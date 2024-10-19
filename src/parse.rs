@@ -3,8 +3,12 @@ use nom::character::complete::{crlf, i64 as i64_parser};
 use nom::IResult;
 
 fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
-    let (input, s) = is_not("\r\n")(input)?;
-    Ok((input, std::str::from_utf8(s).unwrap().to_string()))
+    if input.is_empty() || input == b"\r\n" {
+        Ok((input, "".to_string()))
+    } else {
+        let (input, s) = is_not("\r\n")(input)?;
+        Ok((input, std::str::from_utf8(s).unwrap().to_string()))
+    }
 }
 
 /// Simple strings
@@ -55,60 +59,58 @@ fn parse_integer(input: &[u8]) -> IResult<&[u8], i64> {
 
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn test_parse_string() {
-        let (rest, s) = parse_string(b"Hello").unwrap();
+    type TestResult<'a> = Result<(), nom::Err<nom::error::Error<&'a [u8]>>>;
+
+    #[rstest]
+    #[case(b"Hello", "Hello")]
+    #[case(b"", "")]
+    fn test_parse_string<'a>(#[case] bytes: &'a [u8], #[case] expected: &'a str) -> TestResult<'a> {
+        let (rest, s) = parse_string(bytes)?;
         assert_eq!(rest, b"");
-        assert_eq!(s, "Hello".to_string());
+        assert_eq!(&s, expected);
+        Ok(())
     }
 
-    #[test]
-    fn test_parse_simple_string() {
-        let (rest, simple_string) = parse_simple_string(b"+Ok\r\n").unwrap();
+    #[rstest]
+    #[case(b"+Ok\r\n", "Ok")]
+    #[case(b"+\r\n", "")]
+    fn test_parse_simple_string<'a>(#[case] bytes: &'a [u8], #[case] expected: &'a str) -> TestResult<'a> {
+        let (rest, simple_string) = parse_simple_string(bytes)?;
         assert_eq!(rest, b"");
-        assert_eq!(simple_string.0, "Ok".to_string());
+        assert_eq!(&simple_string.0, expected);
+        Ok(())
     }
 
-    #[test]
-    fn test_parse_simple_error_1() {
-        let (rest, simple_string) = parse_simple_error(b"-ERR unknown command 'asdf'\r\n").unwrap();
-        assert_eq!(rest, b"");
-        assert_eq!(simple_string.0, "ERR unknown command 'asdf'".to_string());
+    #[rstest]
+    #[case(b"+O\rnk\r\n")]
+    #[case(b"+O\nnk\r\n")]
+    #[case(b"+Ok\r")]
+    #[case(b"+Ok\n")]
+    fn test_parse_simple_string_incorrect_termination(#[case] bytes: &[u8]) {
+        assert!(parse_simple_string(bytes).is_err());
     }
 
-    #[test]
-    fn test_parse_simple_error_2() {
-        let (rest, simple_string) = parse_simple_error(b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n").unwrap();
+    #[rstest]
+    #[case(b"-ERR unknown command 'asdf'\r\n", "ERR unknown command 'asdf'")]
+    #[case(b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", "WRONGTYPE Operation against a key holding the wrong kind of value")]
+    fn test_parse_simple_error<'a>(#[case] bytes: &'a [u8], #[case] expected: &'a str) -> TestResult<'a> {
+        let (rest, simple_err) = parse_simple_error(bytes)?;
         assert_eq!(rest, b"");
-        assert_eq!(simple_string.0, "WRONGTYPE Operation against a key holding the wrong kind of value".to_string());
+        assert_eq!(&simple_err.0, expected);
+        Ok(())
     }
 
-    #[test]
-    fn test_parse_integer_1() {
-        let (rest, int)  = parse_integer(b":0\r\n").unwrap();
+    #[rstest]
+    #[case(b":0\r\n", 0)]
+    #[case(b":1000\r\n", 1000)]
+    #[case(b":-42\r\n", -42)]
+    #[case(b":+42\r\n", 42)]
+    fn test_parse_integer<'a>(#[case] bytes: &'a [u8], #[case] expected: i64) -> TestResult<'a> {
+        let (rest, int)  = parse_integer(bytes)?;
         assert_eq!(rest, b"");
-        assert_eq!(int, 0);
-    }
-
-    #[test]
-    fn test_parse_integer_2() {
-        let (rest, int)  = parse_integer(b":1000\r\n").unwrap();
-        assert_eq!(rest, b"");
-        assert_eq!(int, 1000);
-    }
-
-    #[test]
-    fn test_parse_integer_3() {
-        let (rest, int)  = parse_integer(b":-42\r\n").unwrap();
-        assert_eq!(rest, b"");
-        assert_eq!(int, -42);
-    }
-
-    #[test]
-    fn test_parse_integer_4() {
-        let (rest, int)  = parse_integer(b":+42\r\n").unwrap();
-        assert_eq!(rest, b"");
-        assert_eq!(int, 42);
+        assert_eq!(int, expected);
+        Ok(())
     }
 }
