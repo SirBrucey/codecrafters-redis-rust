@@ -1,5 +1,5 @@
 use nom::bytes::complete::{is_not, tag};
-use nom::character::complete::{crlf, i64 as i64_parser};
+use nom::character::complete::{crlf, i64 as i64_parser, u32 as u32_parser};
 use nom::IResult;
 
 fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
@@ -54,6 +54,22 @@ fn parse_integer(input: &[u8]) -> IResult<&[u8], i64> {
     let (input, n) = i64_parser(input)?;
     let (input, _) = crlf(input)?;
     Ok((input, n))
+}
+
+/// Bulk strings
+///
+/// A bulk string represents a single binary string.
+/// The string can be of any size, but by default,
+/// Redis limits it to 512 MB (see the proto-max-bulk-len configuration directive).
+struct BulkString(pub String);
+
+fn parse_bulk_string(input: &[u8]) -> IResult<&[u8], BulkString> {
+    let (input, _) = tag(b"$")(input)?;
+    let (input, len) = u32_parser(input)?;
+    let (input, _) = crlf(input)?;
+    let (s, input) = input.split_at(len.try_into().unwrap());
+    let (input, _) = crlf(input)?;
+    Ok((input, BulkString(std::str::from_utf8(s).unwrap().to_string())))
 }
 
 
@@ -111,6 +127,16 @@ mod tests {
         let (rest, int)  = parse_integer(bytes)?;
         assert_eq!(rest, b"");
         assert_eq!(int, expected);
+        Ok(())
+    }
+
+    #[rstest]
+    #[case(b"$5\r\nhello\r\n", "hello")]
+    #[case(b"$0\r\n\r\n", "")]
+    fn test_parse_bulk_string<'a>(#[case] bytes: &'a [u8], #[case] expected: &'a str) -> TestResult<'a> {
+        let (rest, bs)  = parse_bulk_string(bytes)?;
+        assert_eq!(rest, b"");
+        assert_eq!(&bs.0, expected);
         Ok(())
     }
 }
