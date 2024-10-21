@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -22,7 +21,7 @@ async fn main() {
     }
 }
 
-async fn process(mut stream: TcpStream, db: Arc<Mutex<HashMap<String, Bytes>>>) {
+async fn process(mut stream: TcpStream, db: Arc<Mutex<HashMap<String, command::DbValue>>>) {
     let mut buf = [0; 512];
     loop {
         stream.readable().await.unwrap();

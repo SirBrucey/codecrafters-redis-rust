@@ -11,24 +11,49 @@ pub(crate) enum Command {
     Ping,
     Echo(String),
     Get(String),
-    Set(String, String),
+    Set {
+        key: String,
+        value: String,
+        expiry: Option<u64>,
+    },
+}
+
+pub(crate) struct DbValue {
+    value: Bytes,
+    expires_at: Option<std::time::Instant>,
 }
 
 impl Command {
-    pub(crate) fn execute(self, db: &Arc<Mutex<HashMap<String, Bytes>>>) -> RespElement {
+    pub(crate) fn execute(self, db: &Arc<Mutex<HashMap<String, DbValue>>>) -> RespElement {
         match self {
             Self::Ping => RespElement::SimpleString("PONG".to_owned().into()),
             Self::Echo(message) => RespElement::BulkString(message.into()),
             Self::Get(key) => {
                 let db = db.lock().unwrap();
                 match db.get(&key) {
-                    Some(value) => RespElement::BulkString(value.clone().into()),
+                    Some(db_value) => {
+                        if let Some(expires_at) = db_value.expires_at {
+                            if expires_at < std::time::Instant::now() {
+                                return RespElement::Null;
+                            }
+                        }
+
+                        RespElement::BulkString(db_value.value.clone().into())
+                    }
                     None => RespElement::Null,
                 }
             }
-            Self::Set(key, value) => {
+            Self::Set { key, value, expiry } => {
                 let mut db = db.lock().unwrap();
-                db.insert(key, value.into());
+                db.insert(
+                    key,
+                    DbValue {
+                        value: value.into(),
+                        expires_at: expiry.map(|expiry| {
+                            std::time::Instant::now() + std::time::Duration::from_secs(expiry)
+                        }),
+                    },
+                );
                 RespElement::SimpleString("OK".to_owned().into())
             }
         }
@@ -80,15 +105,28 @@ impl TryFrom<RespElement> for Command {
                             }
                         }
                         "SET" => {
-                            if elements.len() != 3 {
+                            if elements.len() < 3 || elements.len() > 4 {
                                 return Err(CommandError::InvalidCommand);
                             }
 
                             let key = elements[1].clone();
                             let value = elements[2].clone();
+                            let expiry = if elements.len() == 4 {
+                                let expiry = elements[3].clone();
+                                match expiry {
+                                    RespElement::Integer(expiry) => Some(expiry),
+                                    _ => return Err(CommandError::InvalidCommand),
+                                }
+                            } else {
+                                None
+                            };
                             match (key, value) {
                                 (RespElement::BulkString(key), RespElement::BulkString(value)) => {
-                                    Ok(Command::Set(key.unwrap(), value.unwrap()))
+                                    Ok(Command::Set {
+                                        key: key.unwrap(),
+                                        value: value.unwrap(),
+                                        expiry: expiry.map(|expiry| expiry as u64),
+                                    })
                                 }
                                 _ => Err(CommandError::InvalidCommand),
                             }
