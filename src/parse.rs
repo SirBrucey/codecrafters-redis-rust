@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag};
 use nom::character::complete::{crlf, i64 as i64_parser, u32 as u32_parser};
@@ -136,6 +137,12 @@ impl From<String> for BulkString {
     }
 }
 
+impl From<Bytes> for BulkString {
+    fn from(b: Bytes) -> Self {
+        BulkString(String::from_utf8(b.to_vec()).unwrap())
+    }
+}
+
 impl RespSerialise for BulkString {
     fn serialise(&self) -> Vec<u8> {
         format!("${}\r\n{}\r\n", self.0.len(), self.0).into_bytes()
@@ -177,6 +184,7 @@ pub(crate) enum RespElement {
     Array(Vec<RespElement>),
     NullElement(NullBulkString),
     Boolean(bool),
+    Null,
 }
 
 impl RespSerialise for RespElement {
@@ -189,6 +197,7 @@ impl RespSerialise for RespElement {
             RespElement::Array(a) => a.serialise(),
             RespElement::NullElement(n) => n.serialise(),
             RespElement::Boolean(b) => b.serialise(),
+            RespElement::Null => Null.serialise(),
         }
     }
 }
