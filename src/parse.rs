@@ -85,6 +85,7 @@ enum RespElement {
     Integer(i64),
     BulkString(BulkString),
     Array(Vec<RespElement>),
+    NullElement(NullBulkString),
 }
 
 fn parse_element(input: &[u8]) -> IResult<&[u8], RespElement> {
@@ -94,6 +95,7 @@ fn parse_element(input: &[u8]) -> IResult<&[u8], RespElement> {
         map(parse_integer, RespElement::Integer),
         map(parse_bulk_string, RespElement::BulkString),
         map(parse_array, RespElement::Array),
+        map(parse_null_bulk_string, RespElement::NullElement),
     ))(input)
 }
 
@@ -116,6 +118,30 @@ fn parse_array(input: &[u8]) -> IResult<&[u8], Vec<RespElement>> {
     }
 
     Ok((rest, elements))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NullArray;
+
+fn parse_null_array(input: &[u8]) -> IResult<&[u8], NullArray> {
+    let (input, _) = tag(b"*-1\r\n")(input)?;
+    Ok((input, NullArray))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NullBulkString;
+
+fn parse_null_bulk_string(input: &[u8]) -> IResult<&[u8], NullBulkString> {
+    let (input, _) = tag(b"$-1\r\n")(input)?;
+    Ok((input, NullBulkString))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Null;
+
+fn parse_null(input: &[u8]) -> IResult<&[u8], Null> {
+    let (input, _) = tag(b"_\r\n")(input)?;
+    Ok((input, Null))
 }
 
 mod tests {
@@ -256,6 +282,42 @@ mod tests {
         let (rest, elements) = parse_array(bytes)?;
         assert_eq!(rest, b"");
         assert_eq!(elements, expected);
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_parse_null_array<'a>() -> TestResult<'a> {
+        let (rest, _) = parse_null_array(b"*-1\r\n")?;
+        assert_eq!(rest, b"");
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_parse_null_bulk_string<'a>() -> TestResult<'a> {
+        let (rest, _) = parse_null_bulk_string(b"$-1\r\n")?;
+        assert_eq!(rest, b"");
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_parse_null_element_in_array<'a>() -> TestResult<'a> {
+        let (rest, elements) = parse_array(b"*3\r\n$5\r\nhello\r\n$-1\r\n$5\r\nworld\r\n")?;
+        assert_eq!(rest, b"");
+        assert_eq!(
+            elements,
+            vec![
+                RespElement::BulkString(BulkString("hello".to_string())),
+                RespElement::NullElement(NullBulkString),
+                RespElement::BulkString(BulkString("world".to_string()))
+            ]
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn test_parse_null<'a>() -> TestResult<'a> {
+        let (rest, _) = parse_null(b"_\r\n")?;
+        assert_eq!(rest, b"");
         Ok(())
     }
 }
