@@ -78,6 +78,14 @@ fn parse_bulk_string(input: &[u8]) -> IResult<&[u8], BulkString> {
     ))
 }
 
+/// Booleans
+fn parse_boolean(input: &[u8]) -> IResult<&[u8], bool> {
+    alt((
+        map(tag(b"#t\r\n"), |_| true),
+        map(tag(b"#f\r\n"), |_| false),
+    ))(input)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RespElement {
     SimpleString(SimpleString),
@@ -86,6 +94,7 @@ enum RespElement {
     BulkString(BulkString),
     Array(Vec<RespElement>),
     NullElement(NullBulkString),
+    Boolean(bool),
 }
 
 fn parse_element(input: &[u8]) -> IResult<&[u8], RespElement> {
@@ -96,6 +105,7 @@ fn parse_element(input: &[u8]) -> IResult<&[u8], RespElement> {
         map(parse_bulk_string, RespElement::BulkString),
         map(parse_array, RespElement::Array),
         map(parse_null_bulk_string, RespElement::NullElement),
+        map(parse_boolean, RespElement::Boolean),
     ))(input)
 }
 
@@ -318,6 +328,16 @@ mod tests {
     fn test_parse_null<'a>() -> TestResult<'a> {
         let (rest, _) = parse_null(b"_\r\n")?;
         assert_eq!(rest, b"");
+        Ok(())
+    }
+
+    #[rstest]
+    #[case(b"#t\r\n", true)]
+    #[case(b"#f\r\n", false)]
+    fn test_parse_boolean<'a>(#[case] bytes: &'a [u8], #[case] expected: bool) -> TestResult<'a> {
+        let (rest, b) = parse_boolean(bytes)?;
+        assert_eq!(rest, b"");
+        assert_eq!(b, expected);
         Ok(())
     }
 }
