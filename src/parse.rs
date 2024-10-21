@@ -154,6 +154,7 @@ fn parse_null(input: &[u8]) -> IResult<&[u8], Null> {
     Ok((input, Null))
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
