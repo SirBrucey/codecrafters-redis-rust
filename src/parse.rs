@@ -4,12 +4,16 @@ use nom::character::complete::{crlf, i64 as i64_parser, u32 as u32_parser};
 use nom::combinator::map;
 use nom::IResult;
 
-fn parse_string(input: &[u8]) -> IResult<&[u8], &str> {
+pub(crate) trait RespSerialise {
+    fn serialise(&self) -> Vec<u8>;
+}
+
+fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
     if input.is_empty() || input == b"\r\n" {
-        Ok((input, ""))
+        Ok((input, "".to_owned()))
     } else {
         let (input, s) = is_not("\r\n")(input)?;
-        Ok((input, std::str::from_utf8(s).unwrap()))
+        Ok((input, std::str::from_utf8(s).unwrap().to_owned()))
     }
 }
 
@@ -19,11 +23,27 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], &str> {
 /// The string mustn't contain a CR (\r) or LF (\n) character
 /// and is terminated by CRLF (i.e., \r\n).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SimpleString<'a>(&'a str);
+pub(crate) struct SimpleString(String);
 
-impl SimpleString<'_> {
-    fn as_str(&self) -> &str {
+impl SimpleString {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn unwrap(self) -> String {
         self.0
+    }
+}
+
+impl From<String> for SimpleString {
+    fn from(s: String) -> Self {
+        SimpleString(s)
+    }
+}
+
+impl RespSerialise for SimpleString {
+    fn serialise(&self) -> Vec<u8> {
+        format!("+{}\r\n", self.0).into_bytes()
     }
 }
 
@@ -44,11 +64,27 @@ fn parse_simple_string(input: &[u8]) -> IResult<&[u8], SimpleString> {
 // is that clients should treat errors as exceptions,
 // whereas the string encoded in the error type is the error message itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SimpleError<'a>(&'a str);
+pub(crate) struct SimpleError(String);
 
-impl SimpleError<'_> {
-    fn as_str(&self) -> &str {
+impl SimpleError {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn unwrap(self) -> String {
         self.0
+    }
+}
+
+impl From<String> for SimpleError {
+    fn from(s: String) -> Self {
+        SimpleError(s)
+    }
+}
+
+impl RespSerialise for SimpleError {
+    fn serialise(&self) -> Vec<u8> {
+        format!("-{}\r\n", self.0).into_bytes()
     }
 }
 
@@ -70,13 +106,41 @@ fn parse_integer(input: &[u8]) -> IResult<&[u8], i64> {
     Ok((input, n))
 }
 
+impl RespSerialise for i64 {
+    fn serialise(&self) -> Vec<u8> {
+        format!(":{}\r\n", self).into_bytes()
+    }
+}
+
 /// Bulk strings
 ///
 /// A bulk string represents a single binary string.
 /// The string can be of any size, but by default,
 /// Redis limits it to 512 MB (see the proto-max-bulk-len configuration directive).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BulkString(pub String);
+pub(crate) struct BulkString(String);
+
+impl BulkString {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn unwrap(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for BulkString {
+    fn from(s: String) -> Self {
+        BulkString(s)
+    }
+}
+
+impl RespSerialise for BulkString {
+    fn serialise(&self) -> Vec<u8> {
+        format!("${}\r\n{}\r\n", self.0.len(), self.0).into_bytes()
+    }
+}
 
 fn parse_bulk_string(input: &[u8]) -> IResult<&[u8], BulkString> {
     let (input, _) = tag(b"$")(input)?;
@@ -86,7 +150,7 @@ fn parse_bulk_string(input: &[u8]) -> IResult<&[u8], BulkString> {
     let (input, _) = crlf(input)?;
     Ok((
         input,
-        BulkString(std::str::from_utf8(s).unwrap().to_string()),
+        BulkString(std::str::from_utf8(s).unwrap().to_owned()),
     ))
 }
 
@@ -98,18 +162,38 @@ fn parse_boolean(input: &[u8]) -> IResult<&[u8], bool> {
     ))(input)
 }
 
+impl RespSerialise for bool {
+    fn serialise(&self) -> Vec<u8> {
+        format!("#{}\r\n", if *self { "t" } else { "f" }).into_bytes()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum RespElement<'a> {
-    SimpleString(SimpleString<'a>),
-    SimpleError(SimpleError<'a>),
+pub(crate) enum RespElement {
+    SimpleString(SimpleString),
+    SimpleError(SimpleError),
     Integer(i64),
     BulkString(BulkString),
-    Array(Vec<RespElement<'a>>),
+    Array(Vec<RespElement>),
     NullElement(NullBulkString),
     Boolean(bool),
 }
 
-fn parse_element(input: &[u8]) -> IResult<&[u8], RespElement> {
+impl RespSerialise for RespElement {
+    fn serialise(&self) -> Vec<u8> {
+        match self {
+            RespElement::SimpleString(s) => s.serialise(),
+            RespElement::SimpleError(e) => e.serialise(),
+            RespElement::Integer(i) => i.serialise(),
+            RespElement::BulkString(bs) => bs.serialise(),
+            RespElement::Array(a) => a.serialise(),
+            RespElement::NullElement(n) => n.serialise(),
+            RespElement::Boolean(b) => b.serialise(),
+        }
+    }
+}
+
+pub(crate) fn parse_element(input: &[u8]) -> IResult<&[u8], RespElement> {
     alt((
         map(parse_simple_string, RespElement::SimpleString),
         map(parse_simple_error, RespElement::SimpleError),
@@ -142,8 +226,30 @@ fn parse_array(input: &[u8]) -> IResult<&[u8], Vec<RespElement>> {
     Ok((rest, elements))
 }
 
+impl RespSerialise for Vec<RespElement> {
+    fn serialise(&self) -> Vec<u8> {
+        let mut s = format!("*{}\r\n", self.len());
+        for element in self {
+            s.push_str(
+                &element
+                    .serialise()
+                    .iter()
+                    .map(|&b| b as char)
+                    .collect::<String>(),
+            );
+        }
+        s.into_bytes()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NullArray;
+
+impl RespSerialise for NullArray {
+    fn serialise(&self) -> Vec<u8> {
+        b"*-1\r\n".to_vec()
+    }
+}
 
 fn parse_null_array(input: &[u8]) -> IResult<&[u8], NullArray> {
     let (input, _) = tag(b"*-1\r\n")(input)?;
@@ -151,15 +257,27 @@ fn parse_null_array(input: &[u8]) -> IResult<&[u8], NullArray> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct NullBulkString;
+pub(crate) struct NullBulkString;
 
 fn parse_null_bulk_string(input: &[u8]) -> IResult<&[u8], NullBulkString> {
     let (input, _) = tag(b"$-1\r\n")(input)?;
     Ok((input, NullBulkString))
 }
 
+impl RespSerialise for NullBulkString {
+    fn serialise(&self) -> Vec<u8> {
+        b"$-1\r\n".to_vec()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Null;
+pub(crate) struct Null;
+
+impl RespSerialise for Null {
+    fn serialise(&self) -> Vec<u8> {
+        b"_\r\n".to_vec()
+    }
+}
 
 fn parse_null(input: &[u8]) -> IResult<&[u8], Null> {
     let (input, _) = tag(b"_\r\n")(input)?;
@@ -242,18 +360,18 @@ mod tests {
     ) -> TestResult<'a> {
         let (rest, bs) = parse_bulk_string(bytes)?;
         assert_eq!(rest, b"");
-        assert_eq!(&bs.0, expected);
+        assert_eq!(bs.as_str(), expected);
         Ok(())
     }
 
     #[rstest]
-    #[case(b"+Ok\r\n", RespElement::SimpleString(SimpleString("Ok")))]
+    #[case(b"+Ok\r\n", RespElement::SimpleString(SimpleString("Ok".into())))]
     #[case(
         b"-ERR unknown command 'asdf'\r\n",
-        RespElement::SimpleError(SimpleError("ERR unknown command 'asdf'"))
+        RespElement::SimpleError(SimpleError("ERR unknown command 'asdf'".into()))
     )]
     #[case(b":0\r\n", RespElement::Integer(0))]
-    #[case(b"$5\r\nhello\r\n", RespElement::BulkString(BulkString("hello".to_string())))]
+    #[case(b"$5\r\nhello\r\n", RespElement::BulkString(BulkString("hello".into())))]
     fn test_parse_element<'a>(
         #[case] bytes: &'a [u8],
         #[case] expected: RespElement,
@@ -269,8 +387,8 @@ mod tests {
     #[case(
         b"*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n",
         vec![
-            RespElement::BulkString(BulkString("hello".to_string())),
-            RespElement::BulkString(BulkString("world".to_string()))
+            RespElement::BulkString(BulkString("hello".into())),
+            RespElement::BulkString(BulkString("world".into()))
         ]
     )]
     #[case(
@@ -284,7 +402,7 @@ mod tests {
             RespElement::Integer(2),
             RespElement::Integer(3),
             RespElement::Integer(4),
-            RespElement::BulkString(BulkString("hello".to_string()))
+            RespElement::BulkString(BulkString("hello".into()))
         ]
     )]
     #[case(
@@ -296,8 +414,8 @@ mod tests {
                 RespElement::Integer(3)
             ]),
             RespElement::Array(vec![
-                RespElement::SimpleString(SimpleString("Hello")),
-                RespElement::SimpleError(SimpleError("World"))
+                RespElement::SimpleString(SimpleString("Hello".into())),
+                RespElement::SimpleError(SimpleError("World".into()))
             ])
         ]
     )]
@@ -332,9 +450,9 @@ mod tests {
         assert_eq!(
             elements,
             vec![
-                RespElement::BulkString(BulkString("hello".to_string())),
+                RespElement::BulkString(BulkString("hello".into())),
                 RespElement::NullElement(NullBulkString),
-                RespElement::BulkString(BulkString("world".to_string()))
+                RespElement::BulkString(BulkString("world".into()))
             ]
         );
         Ok(())
