@@ -4,12 +4,12 @@ use nom::character::complete::{crlf, i64 as i64_parser, u32 as u32_parser};
 use nom::combinator::map;
 use nom::IResult;
 
-fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
+fn parse_string(input: &[u8]) -> IResult<&[u8], &str> {
     if input.is_empty() || input == b"\r\n" {
-        Ok((input, "".to_string()))
+        Ok((input, ""))
     } else {
         let (input, s) = is_not("\r\n")(input)?;
-        Ok((input, std::str::from_utf8(s).unwrap().to_string()))
+        Ok((input, std::str::from_utf8(s).unwrap()))
     }
 }
 
@@ -19,7 +19,13 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], String> {
 /// The string mustn't contain a CR (\r) or LF (\n) character
 /// and is terminated by CRLF (i.e., \r\n).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SimpleString(pub String);
+struct SimpleString<'a>(&'a str);
+
+impl SimpleString<'_> {
+    fn as_str(&self) -> &str {
+        self.0
+    }
+}
 
 fn parse_simple_string(input: &[u8]) -> IResult<&[u8], SimpleString> {
     let (input, _) = tag(b"+")(input)?;
@@ -38,7 +44,13 @@ fn parse_simple_string(input: &[u8]) -> IResult<&[u8], SimpleString> {
 // is that clients should treat errors as exceptions,
 // whereas the string encoded in the error type is the error message itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SimpleError(pub String);
+struct SimpleError<'a>(&'a str);
+
+impl SimpleError<'_> {
+    fn as_str(&self) -> &str {
+        self.0
+    }
+}
 
 fn parse_simple_error(input: &[u8]) -> IResult<&[u8], SimpleError> {
     let (input, _) = tag(b"-")(input)?;
@@ -87,12 +99,12 @@ fn parse_boolean(input: &[u8]) -> IResult<&[u8], bool> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum RespElement {
-    SimpleString(SimpleString),
-    SimpleError(SimpleError),
+enum RespElement<'a> {
+    SimpleString(SimpleString<'a>),
+    SimpleError(SimpleError<'a>),
     Integer(i64),
     BulkString(BulkString),
-    Array(Vec<RespElement>),
+    Array(Vec<RespElement<'a>>),
     NullElement(NullBulkString),
     Boolean(bool),
 }
@@ -167,7 +179,7 @@ mod tests {
     fn test_parse_string<'a>(#[case] bytes: &'a [u8], #[case] expected: &'a str) -> TestResult<'a> {
         let (rest, s) = parse_string(bytes)?;
         assert_eq!(rest, b"");
-        assert_eq!(&s, expected);
+        assert_eq!(s, expected);
         Ok(())
     }
 
@@ -180,7 +192,7 @@ mod tests {
     ) -> TestResult<'a> {
         let (rest, simple_string) = parse_simple_string(bytes)?;
         assert_eq!(rest, b"");
-        assert_eq!(&simple_string.0, expected);
+        assert_eq!(simple_string.as_str(), expected);
         Ok(())
     }
 
@@ -205,7 +217,7 @@ mod tests {
     ) -> TestResult<'a> {
         let (rest, simple_err) = parse_simple_error(bytes)?;
         assert_eq!(rest, b"");
-        assert_eq!(&simple_err.0, expected);
+        assert_eq!(simple_err.as_str(), expected);
         Ok(())
     }
 
@@ -235,8 +247,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case(b"+Ok\r\n", RespElement::SimpleString(SimpleString("Ok".to_string())))]
-    #[case(b"-ERR unknown command 'asdf'\r\n", RespElement::SimpleError(SimpleError("ERR unknown command 'asdf'".to_string())))]
+    #[case(b"+Ok\r\n", RespElement::SimpleString(SimpleString("Ok")))]
+    #[case(
+        b"-ERR unknown command 'asdf'\r\n",
+        RespElement::SimpleError(SimpleError("ERR unknown command 'asdf'"))
+    )]
     #[case(b":0\r\n", RespElement::Integer(0))]
     #[case(b"$5\r\nhello\r\n", RespElement::BulkString(BulkString("hello".to_string())))]
     fn test_parse_element<'a>(
@@ -281,8 +296,8 @@ mod tests {
                 RespElement::Integer(3)
             ]),
             RespElement::Array(vec![
-                RespElement::SimpleString(SimpleString("Hello".to_string())),
-                RespElement::SimpleError(SimpleError("World".to_string()))
+                RespElement::SimpleString(SimpleString("Hello")),
+                RespElement::SimpleError(SimpleError("World"))
             ])
         ]
     )]
