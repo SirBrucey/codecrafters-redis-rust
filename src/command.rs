@@ -5,7 +5,10 @@ use std::{
 
 use bytes::Bytes;
 
-use crate::parse::{NullBulkString, RespElement};
+use crate::{
+    parse::{NullBulkString, RespElement},
+    OptValue,
+};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Command {
@@ -13,6 +16,7 @@ pub(crate) enum Command {
     Echo(String),
     Get(String),
     Set(SetCommand),
+    GetConfig(Vec<String>),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -22,7 +26,11 @@ pub(crate) struct DbValue {
 }
 
 impl Command {
-    pub(crate) fn execute(self, db: &Arc<Mutex<HashMap<String, DbValue>>>) -> RespElement {
+    pub(crate) fn execute(
+        self,
+        db: &Arc<Mutex<HashMap<String, DbValue>>>,
+        opts: &Arc<HashMap<String, OptValue>>,
+    ) -> RespElement {
         match self {
             Self::Ping => RespElement::SimpleString("PONG".to_owned().into()),
             Self::Echo(message) => RespElement::BulkString(message.into()),
@@ -92,6 +100,34 @@ impl Command {
                     NullBulkString.into()
                 }
             }
+            Self::GetConfig(params) => {
+                let mut vec = Vec::with_capacity(params.len());
+                for param in params {
+                    if let Some(value) = opts.get(&param) {
+                        vec.push(RespElement::BulkString(param.into()));
+                        vec.push(value.into());
+                    }
+                }
+                RespElement::Array(vec)
+            }
+        }
+    }
+}
+
+// FIXME: These clones do not feel good.
+impl From<&OptValue> for RespElement {
+    fn from(value: &OptValue) -> Self {
+        match value {
+            OptValue::String(s) => RespElement::BulkString(s.clone().into()),
+            OptValue::UInt(i) => RespElement::Integer(*i as i64),
+            OptValue::Path(path_buf) => RespElement::BulkString(
+                path_buf
+                    .clone()
+                    .into_os_string()
+                    .into_string()
+                    .unwrap()
+                    .into(),
+            ),
         }
     }
 }
@@ -240,6 +276,28 @@ impl TryFrom<RespElement> for Command {
                                 get,
                                 expiry,
                             }))
+                        }
+                        "CONFIG" => {
+                            let subcommand = elements.get(1).ok_or(CommandError::SyntaxError)?;
+                            let subcommand = match subcommand {
+                                RespElement::BulkString(subcommand) => subcommand.as_ref(),
+                                _ => return Err(CommandError::SyntaxError),
+                            };
+                            match subcommand {
+                                "GET" => {
+                                    let mut params = Vec::with_capacity(elements.len() - 2);
+                                    for i in 2..elements.len() {
+                                        params.push(match &elements[i] {
+                                            RespElement::BulkString(param) => {
+                                                param.as_ref().to_owned()
+                                            }
+                                            _ => return Err(CommandError::SyntaxError),
+                                        });
+                                    }
+                                    Ok(Command::GetConfig(params))
+                                }
+                                _ => Err(CommandError::UnknownCommand),
+                            }
                         }
                         _ => Err(CommandError::UnknownCommand),
                     },
