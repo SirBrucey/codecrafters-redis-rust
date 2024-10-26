@@ -270,6 +270,12 @@ fn parse_null_array(input: &[u8]) -> IResult<&[u8], NullArray> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NullBulkString;
 
+impl From<NullBulkString> for RespElement {
+    fn from(value: NullBulkString) -> Self {
+        RespElement::NullElement(value)
+    }
+}
+
 fn parse_null_bulk_string(input: &[u8]) -> IResult<&[u8], NullBulkString> {
     let (input, _) = tag(b"$-1\r\n")(input)?;
     Ok((input, NullBulkString))

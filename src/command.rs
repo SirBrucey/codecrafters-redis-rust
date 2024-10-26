@@ -5,7 +5,7 @@ use std::{
 
 use bytes::Bytes;
 
-use crate::parse::RespElement;
+use crate::parse::{NullBulkString, RespElement};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Command {
@@ -32,13 +32,13 @@ impl Command {
                     Some(db_value) => {
                         if let Some(expires_at) = db_value.expires_at {
                             if expires_at < std::time::Instant::now() {
-                                return RespElement::Null;
+                                return NullBulkString.into();
                             }
                         }
 
                         RespElement::BulkString(db_value.value.clone().into())
                     }
-                    None => RespElement::Null,
+                    None => NullBulkString.into(),
                 }
             }
             Self::Set(set_cmd) => {
@@ -82,14 +82,14 @@ impl Command {
                             Some(db_value) => {
                                 RespElement::BulkString(db_value.value.clone().into())
                             }
-                            None => RespElement::Null,
+                            None => NullBulkString.into(),
                         }
                     } else {
                         RespElement::SimpleString("OK".to_owned().into())
                     }
                 } else {
                     // NX or XX confilct.
-                    RespElement::Null
+                    NullBulkString.into()
                 }
             }
         }
