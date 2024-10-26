@@ -371,7 +371,7 @@ mod tests {
     ) -> TestResult<'a> {
         let (rest, bs) = parse_bulk_string(bytes)?;
         assert_eq!(rest, b"");
-        assert_eq!(bs.as_str(), expected);
+        assert_eq!(bs.as_ref(), expected);
         Ok(())
     }
 

@@ -7,6 +7,7 @@ use bytes::Bytes;
 
 use crate::parse::RespElement;
 
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Command {
     Ping,
     Echo(String),
@@ -14,6 +15,7 @@ pub(crate) enum Command {
     Set(SetCommand),
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct DbValue {
     value: Bytes,
     expires_at: Option<std::time::Instant>,
@@ -94,6 +96,7 @@ impl Command {
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum CommandError {
     MissingCommand,
     InvalidCommand,
@@ -265,6 +268,7 @@ impl TryFrom<RespElement> for Command {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct SetCommand {
     key: String,
     value: String,
@@ -273,15 +277,65 @@ pub(crate) struct SetCommand {
     expiry: Option<ExpiryOpt>,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum SetOnlyIf {
     DoesNotExists,
     AlreadyExists,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
 enum ExpiryOpt {
     Seconds(u64),
     Milliseconds(u64),
     TimestampSeconds(u64),
     TimestampMilliseconds(u64),
     KeepTtl,
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_basic_set_command() {
+        let command = crate::command::Command::try_from(crate::parse::RespElement::Array(vec![
+            crate::parse::RespElement::BulkString("SET".to_owned().into()),
+            crate::parse::RespElement::BulkString("key".to_owned().into()),
+            crate::parse::RespElement::BulkString("value".to_owned().into()),
+        ]))
+        .unwrap();
+
+        if let crate::command::Command::Set(set_command) = command {
+            assert_eq!(set_command.key, "key");
+            assert_eq!(set_command.value, "value");
+            assert_eq!(set_command.only_if, None);
+            assert_eq!(set_command.get, false);
+            assert_eq!(set_command.expiry, None);
+        } else {
+            panic!("Expected SET command");
+        }
+    }
+
+    #[test]
+    fn test_set_command_with_px() {
+        let command = crate::command::Command::try_from(crate::parse::RespElement::Array(vec![
+            crate::parse::RespElement::BulkString("SET".to_owned().into()),
+            crate::parse::RespElement::BulkString("key".to_owned().into()),
+            crate::parse::RespElement::BulkString("value".to_owned().into()),
+            crate::parse::RespElement::BulkString("PX".to_owned().into()),
+            crate::parse::RespElement::Integer(1000),
+        ]))
+        .unwrap();
+
+        if let crate::command::Command::Set(set_command) = command {
+            assert_eq!(set_command.key, "key");
+            assert_eq!(set_command.value, "value");
+            assert_eq!(set_command.only_if, None);
+            assert_eq!(set_command.get, false);
+            assert_eq!(
+                set_command.expiry,
+                Some(crate::command::ExpiryOpt::Milliseconds(1000))
+            );
+        } else {
+            panic!("Expected SET command");
+        }
+    }
 }
