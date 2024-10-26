@@ -11,11 +11,7 @@ pub(crate) enum Command {
     Ping,
     Echo(String),
     Get(String),
-    Set {
-        key: String,
-        value: String,
-        expiry: Option<u64>,
-    },
+    Set(SetCommand),
 }
 
 pub(crate) struct DbValue {
@@ -43,18 +39,56 @@ impl Command {
                     None => RespElement::Null,
                 }
             }
-            Self::Set { key, value, expiry } => {
+            Self::Set(set_cmd) => {
+                let mut should_set = true;
                 let mut db = db.lock().unwrap();
-                db.insert(
-                    key,
-                    DbValue {
-                        value: value.into(),
-                        expires_at: expiry.map(|expiry| {
-                            std::time::Instant::now() + std::time::Duration::from_secs(expiry)
-                        }),
-                    },
-                );
-                RespElement::SimpleString("OK".to_owned().into())
+                if set_cmd.only_if.is_some() || set_cmd.get {
+                    let exists = db.contains_key(&set_cmd.key);
+                    match (exists, set_cmd.only_if) {
+                        (true, Some(SetOnlyIf::DoesNotExists)) => should_set = false,
+                        (false, Some(SetOnlyIf::AlreadyExists)) => should_set = false,
+                        _ => {}
+                    };
+                };
+                if should_set {
+                    let old_value = db.insert(
+                        set_cmd.key,
+                        DbValue {
+                            value: set_cmd.value.into(),
+                            expires_at: if let Some(expiry) = set_cmd.expiry {
+                                Some(match expiry {
+                                    ExpiryOpt::Seconds(i) => {
+                                        std::time::Instant::now()
+                                            + std::time::Duration::from_secs(i)
+                                    }
+                                    ExpiryOpt::Milliseconds(i) => {
+                                        std::time::Instant::now()
+                                            + std::time::Duration::from_millis(i)
+                                    }
+                                    ExpiryOpt::TimestampSeconds(_) => todo!(),
+                                    ExpiryOpt::TimestampMilliseconds(_) => todo!(),
+                                    ExpiryOpt::KeepTtl => todo!(),
+                                })
+                            } else {
+                                None
+                            },
+                        },
+                    );
+
+                    if set_cmd.get {
+                        match old_value {
+                            Some(db_value) => {
+                                RespElement::BulkString(db_value.value.clone().into())
+                            }
+                            None => RespElement::Null,
+                        }
+                    } else {
+                        RespElement::SimpleString("OK".to_owned().into())
+                    }
+                } else {
+                    // NX or XX confilct.
+                    RespElement::Null
+                }
             }
         }
     }
@@ -64,6 +98,7 @@ pub(crate) enum CommandError {
     MissingCommand,
     InvalidCommand,
     UnknownCommand,
+    SyntaxError,
 }
 
 impl TryFrom<RespElement> for Command {
@@ -78,7 +113,7 @@ impl TryFrom<RespElement> for Command {
 
                 let command = &elements[0];
                 match command {
-                    RespElement::BulkString(command) => match command.as_str() {
+                    RespElement::BulkString(command) => match command.as_ref() {
                         "PING" => Ok(Command::Ping),
                         "ECHO" => {
                             if elements.len() != 2 {
@@ -105,31 +140,112 @@ impl TryFrom<RespElement> for Command {
                             }
                         }
                         "SET" => {
-                            if elements.len() < 3 || elements.len() > 4 {
+                            if elements.len() < 3 {
                                 return Err(CommandError::InvalidCommand);
                             }
 
                             let key = elements[1].clone();
+                            let key = match key {
+                                RespElement::BulkString(key) => key.unwrap(),
+                                _ => return Err(CommandError::InvalidCommand),
+                            };
                             let value = elements[2].clone();
-                            let expiry = if elements.len() == 4 {
-                                let expiry = elements[3].clone();
-                                match expiry {
-                                    RespElement::Integer(expiry) => Some(expiry),
+                            let value = match value {
+                                RespElement::BulkString(value) => value.unwrap(),
+                                _ => return Err(CommandError::InvalidCommand),
+                            };
+
+                            let mut only_if = None;
+                            let mut get = false;
+                            let mut expiry = None;
+
+                            let mut idx = 3;
+                            while idx < elements.len() {
+                                let arg = &elements[idx];
+                                match arg {
+                                    RespElement::BulkString(arg) => match arg.as_ref() {
+                                        "NX" if only_if.is_none() => {
+                                            only_if = Some(SetOnlyIf::DoesNotExists);
+                                            idx += 1;
+                                        }
+                                        "XX" if only_if.is_none() => {
+                                            only_if = Some(SetOnlyIf::AlreadyExists);
+                                            idx += 1;
+                                        }
+                                        "NX" | "XX" => return Err(CommandError::SyntaxError),
+                                        "GET" if !get => {
+                                            get = true;
+                                            idx += 1;
+                                        }
+                                        "GET" => return Err(CommandError::SyntaxError),
+                                        "EX" if expiry.is_none() => {
+                                            let value = elements
+                                                .get(idx + 1)
+                                                .ok_or(CommandError::SyntaxError)?;
+                                            if let RespElement::Integer(value) = value {
+                                                expiry = Some(ExpiryOpt::Seconds(*value as u64));
+                                                idx += 2;
+                                            } else {
+                                                return Err(CommandError::SyntaxError);
+                                            }
+                                        }
+                                        "PX" if expiry.is_none() => {
+                                            let value = elements
+                                                .get(idx + 1)
+                                                .ok_or(CommandError::SyntaxError)?;
+                                            if let RespElement::Integer(value) = value {
+                                                expiry =
+                                                    Some(ExpiryOpt::Milliseconds(*value as u64));
+                                                idx += 2;
+                                            } else {
+                                                return Err(CommandError::SyntaxError);
+                                            }
+                                        }
+                                        "EXAT" if expiry.is_none() => {
+                                            let value = elements
+                                                .get(idx + 1)
+                                                .ok_or(CommandError::SyntaxError)?;
+                                            if let RespElement::Integer(value) = value {
+                                                expiry = Some(ExpiryOpt::TimestampSeconds(
+                                                    *value as u64,
+                                                ));
+                                                idx += 2;
+                                            } else {
+                                                return Err(CommandError::SyntaxError);
+                                            }
+                                        }
+                                        "PXAT" if expiry.is_none() => {
+                                            let value = elements
+                                                .get(idx + 1)
+                                                .ok_or(CommandError::SyntaxError)?;
+                                            if let RespElement::Integer(value) = value {
+                                                expiry = Some(ExpiryOpt::TimestampMilliseconds(
+                                                    *value as u64,
+                                                ));
+                                                idx += 2;
+                                            } else {
+                                                return Err(CommandError::SyntaxError);
+                                            }
+                                        }
+                                        "KEEPTTL" if expiry.is_none() => {
+                                            expiry = Some(ExpiryOpt::KeepTtl);
+                                            idx += 1;
+                                        }
+                                        "EX" | "PX" | "EXAT" | "PXAT" | "KEEPTTL" => {
+                                            return Err(CommandError::SyntaxError)
+                                        }
+                                        _ => return Err(CommandError::InvalidCommand),
+                                    },
                                     _ => return Err(CommandError::InvalidCommand),
                                 }
-                            } else {
-                                None
-                            };
-                            match (key, value) {
-                                (RespElement::BulkString(key), RespElement::BulkString(value)) => {
-                                    Ok(Command::Set {
-                                        key: key.unwrap(),
-                                        value: value.unwrap(),
-                                        expiry: expiry.map(|expiry| expiry as u64),
-                                    })
-                                }
-                                _ => Err(CommandError::InvalidCommand),
                             }
+                            Ok(Command::Set(SetCommand {
+                                key,
+                                value,
+                                only_if,
+                                get,
+                                expiry,
+                            }))
                         }
                         _ => Err(CommandError::UnknownCommand),
                     },
@@ -139,4 +255,25 @@ impl TryFrom<RespElement> for Command {
             _ => Err(CommandError::UnknownCommand),
         }
     }
+}
+
+pub(crate) struct SetCommand {
+    key: String,
+    value: String,
+    only_if: Option<SetOnlyIf>,
+    get: bool,
+    expiry: Option<ExpiryOpt>,
+}
+
+enum SetOnlyIf {
+    DoesNotExists,
+    AlreadyExists,
+}
+
+enum ExpiryOpt {
+    Seconds(u64),
+    Milliseconds(u64),
+    TimestampSeconds(u64),
+    TimestampMilliseconds(u64),
+    KeepTtl,
 }

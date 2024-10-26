@@ -122,10 +122,6 @@ impl RespSerialise for i64 {
 pub(crate) struct BulkString(String);
 
 impl BulkString {
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-
     pub(crate) fn unwrap(self) -> String {
         self.0
     }
@@ -140,6 +136,12 @@ impl From<String> for BulkString {
 impl From<Bytes> for BulkString {
     fn from(b: Bytes) -> Self {
         BulkString(String::from_utf8(b.to_vec()).unwrap())
+    }
+}
+
+impl AsRef<str> for BulkString {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 
