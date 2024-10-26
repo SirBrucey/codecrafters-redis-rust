@@ -163,79 +163,87 @@ impl TryFrom<RespElement> for Command {
                             while idx < elements.len() {
                                 let arg = &elements[idx];
                                 match arg {
-                                    RespElement::BulkString(arg) => match arg.as_ref() {
-                                        "NX" if only_if.is_none() => {
-                                            only_if = Some(SetOnlyIf::DoesNotExists);
-                                            idx += 1;
-                                        }
-                                        "XX" if only_if.is_none() => {
-                                            only_if = Some(SetOnlyIf::AlreadyExists);
-                                            idx += 1;
-                                        }
-                                        "NX" | "XX" => return Err(CommandError::SyntaxError),
-                                        "GET" if !get => {
-                                            get = true;
-                                            idx += 1;
-                                        }
-                                        "GET" => return Err(CommandError::SyntaxError),
-                                        "EX" if expiry.is_none() => {
-                                            let value = elements
-                                                .get(idx + 1)
-                                                .ok_or(CommandError::SyntaxError)?;
-                                            if let RespElement::Integer(value) = value {
-                                                expiry = Some(ExpiryOpt::Seconds(*value as u64));
-                                                idx += 2;
-                                            } else {
-                                                return Err(CommandError::SyntaxError);
+                                    RespElement::BulkString(arg) => {
+                                        let arg: &str = arg.as_ref();
+                                        let arg = arg.to_uppercase();
+
+                                        match arg.as_str() {
+                                            "NX" if only_if.is_none() => {
+                                                only_if = Some(SetOnlyIf::DoesNotExists);
+                                                idx += 1;
                                             }
-                                        }
-                                        "PX" if expiry.is_none() => {
-                                            let value = elements
-                                                .get(idx + 1)
-                                                .ok_or(CommandError::SyntaxError)?;
-                                            if let RespElement::Integer(value) = value {
-                                                expiry =
-                                                    Some(ExpiryOpt::Milliseconds(*value as u64));
-                                                idx += 2;
-                                            } else {
-                                                return Err(CommandError::SyntaxError);
+                                            "XX" if only_if.is_none() => {
+                                                only_if = Some(SetOnlyIf::AlreadyExists);
+                                                idx += 1;
                                             }
-                                        }
-                                        "EXAT" if expiry.is_none() => {
-                                            let value = elements
-                                                .get(idx + 1)
-                                                .ok_or(CommandError::SyntaxError)?;
-                                            if let RespElement::Integer(value) = value {
-                                                expiry = Some(ExpiryOpt::TimestampSeconds(
-                                                    *value as u64,
-                                                ));
-                                                idx += 2;
-                                            } else {
-                                                return Err(CommandError::SyntaxError);
+                                            "NX" | "XX" => return Err(CommandError::SyntaxError),
+                                            "GET" if !get => {
+                                                get = true;
+                                                idx += 1;
                                             }
-                                        }
-                                        "PXAT" if expiry.is_none() => {
-                                            let value = elements
-                                                .get(idx + 1)
-                                                .ok_or(CommandError::SyntaxError)?;
-                                            if let RespElement::Integer(value) = value {
-                                                expiry = Some(ExpiryOpt::TimestampMilliseconds(
-                                                    *value as u64,
-                                                ));
-                                                idx += 2;
-                                            } else {
-                                                return Err(CommandError::SyntaxError);
+                                            "GET" => return Err(CommandError::SyntaxError),
+                                            "EX" if expiry.is_none() => {
+                                                let value = elements
+                                                    .get(idx + 1)
+                                                    .ok_or(CommandError::SyntaxError)?;
+                                                if let RespElement::Integer(value) = value {
+                                                    expiry =
+                                                        Some(ExpiryOpt::Seconds(*value as u64));
+                                                    idx += 2;
+                                                } else {
+                                                    return Err(CommandError::SyntaxError);
+                                                }
                                             }
+                                            "PX" if expiry.is_none() => {
+                                                let value = elements
+                                                    .get(idx + 1)
+                                                    .ok_or(CommandError::SyntaxError)?;
+                                                if let RespElement::Integer(value) = value {
+                                                    expiry = Some(ExpiryOpt::Milliseconds(
+                                                        *value as u64,
+                                                    ));
+                                                    idx += 2;
+                                                } else {
+                                                    return Err(CommandError::SyntaxError);
+                                                }
+                                            }
+                                            "EXAT" if expiry.is_none() => {
+                                                let value = elements
+                                                    .get(idx + 1)
+                                                    .ok_or(CommandError::SyntaxError)?;
+                                                if let RespElement::Integer(value) = value {
+                                                    expiry = Some(ExpiryOpt::TimestampSeconds(
+                                                        *value as u64,
+                                                    ));
+                                                    idx += 2;
+                                                } else {
+                                                    return Err(CommandError::SyntaxError);
+                                                }
+                                            }
+                                            "PXAT" if expiry.is_none() => {
+                                                let value = elements
+                                                    .get(idx + 1)
+                                                    .ok_or(CommandError::SyntaxError)?;
+                                                if let RespElement::Integer(value) = value {
+                                                    expiry =
+                                                        Some(ExpiryOpt::TimestampMilliseconds(
+                                                            *value as u64,
+                                                        ));
+                                                    idx += 2;
+                                                } else {
+                                                    return Err(CommandError::SyntaxError);
+                                                }
+                                            }
+                                            "KEEPTTL" if expiry.is_none() => {
+                                                expiry = Some(ExpiryOpt::KeepTtl);
+                                                idx += 1;
+                                            }
+                                            "EX" | "PX" | "EXAT" | "PXAT" | "KEEPTTL" => {
+                                                return Err(CommandError::SyntaxError)
+                                            }
+                                            _ => return Err(CommandError::InvalidCommand),
                                         }
-                                        "KEEPTTL" if expiry.is_none() => {
-                                            expiry = Some(ExpiryOpt::KeepTtl);
-                                            idx += 1;
-                                        }
-                                        "EX" | "PX" | "EXAT" | "PXAT" | "KEEPTTL" => {
-                                            return Err(CommandError::SyntaxError)
-                                        }
-                                        _ => return Err(CommandError::InvalidCommand),
-                                    },
+                                    }
                                     _ => return Err(CommandError::InvalidCommand),
                                 }
                             }
