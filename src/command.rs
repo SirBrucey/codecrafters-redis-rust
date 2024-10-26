@@ -189,53 +189,36 @@ impl TryFrom<RespElement> for Command {
                                                 let value = elements
                                                     .get(idx + 1)
                                                     .ok_or(CommandError::SyntaxError)?;
-                                                if let RespElement::Integer(value) = value {
-                                                    expiry =
-                                                        Some(ExpiryOpt::Seconds(*value as u64));
-                                                    idx += 2;
-                                                } else {
-                                                    return Err(CommandError::SyntaxError);
-                                                }
+                                                expiry =
+                                                    Some(ExpiryOpt::Seconds(parse_int(value)?));
+                                                idx += 2;
                                             }
                                             "PX" if expiry.is_none() => {
                                                 let value = elements
                                                     .get(idx + 1)
                                                     .ok_or(CommandError::SyntaxError)?;
-                                                if let RespElement::Integer(value) = value {
-                                                    expiry = Some(ExpiryOpt::Milliseconds(
-                                                        *value as u64,
-                                                    ));
-                                                    idx += 2;
-                                                } else {
-                                                    return Err(CommandError::SyntaxError);
-                                                }
+                                                expiry = Some(ExpiryOpt::Milliseconds(parse_int(
+                                                    value,
+                                                )?));
+                                                idx += 2;
                                             }
                                             "EXAT" if expiry.is_none() => {
                                                 let value = elements
                                                     .get(idx + 1)
                                                     .ok_or(CommandError::SyntaxError)?;
-                                                if let RespElement::Integer(value) = value {
-                                                    expiry = Some(ExpiryOpt::TimestampSeconds(
-                                                        *value as u64,
-                                                    ));
-                                                    idx += 2;
-                                                } else {
-                                                    return Err(CommandError::SyntaxError);
-                                                }
+                                                expiry = Some(ExpiryOpt::TimestampSeconds(
+                                                    parse_int(value)?,
+                                                ));
+                                                idx += 2;
                                             }
                                             "PXAT" if expiry.is_none() => {
                                                 let value = elements
                                                     .get(idx + 1)
                                                     .ok_or(CommandError::SyntaxError)?;
-                                                if let RespElement::Integer(value) = value {
-                                                    expiry =
-                                                        Some(ExpiryOpt::TimestampMilliseconds(
-                                                            *value as u64,
-                                                        ));
-                                                    idx += 2;
-                                                } else {
-                                                    return Err(CommandError::SyntaxError);
-                                                }
+                                                expiry = Some(ExpiryOpt::TimestampMilliseconds(
+                                                    parse_int(value)?,
+                                                ));
+                                                idx += 2;
                                             }
                                             "KEEPTTL" if expiry.is_none() => {
                                                 expiry = Some(ExpiryOpt::KeepTtl);
@@ -265,6 +248,18 @@ impl TryFrom<RespElement> for Command {
             }
             _ => Err(CommandError::UnknownCommand),
         }
+    }
+}
+
+// Docs say expiries should be positive integers, but the tests were sending a bulk string.
+fn parse_int(element: &RespElement) -> Result<u64, CommandError> {
+    match element {
+        RespElement::Integer(value) => Ok(*value as u64),
+        RespElement::BulkString(value) => Ok(value
+            .as_ref()
+            .parse()
+            .map_err(|_| CommandError::SyntaxError)?),
+        _ => Err(CommandError::SyntaxError),
     }
 }
 
@@ -322,6 +317,31 @@ mod tests {
             crate::parse::RespElement::BulkString("value".to_owned().into()),
             crate::parse::RespElement::BulkString("PX".to_owned().into()),
             crate::parse::RespElement::Integer(1000),
+        ]))
+        .unwrap();
+
+        if let crate::command::Command::Set(set_command) = command {
+            assert_eq!(set_command.key, "key");
+            assert_eq!(set_command.value, "value");
+            assert_eq!(set_command.only_if, None);
+            assert_eq!(set_command.get, false);
+            assert_eq!(
+                set_command.expiry,
+                Some(crate::command::ExpiryOpt::Milliseconds(1000))
+            );
+        } else {
+            panic!("Expected SET command");
+        }
+    }
+
+    #[test]
+    fn test_set_command_with_px_as_bulk_string() {
+        let command = crate::command::Command::try_from(crate::parse::RespElement::Array(vec![
+            crate::parse::RespElement::BulkString("SET".to_owned().into()),
+            crate::parse::RespElement::BulkString("key".to_owned().into()),
+            crate::parse::RespElement::BulkString("value".to_owned().into()),
+            crate::parse::RespElement::BulkString("PX".to_owned().into()),
+            crate::parse::RespElement::BulkString("1000".to_owned().into()),
         ]))
         .unwrap();
 
