@@ -338,4 +338,22 @@ mod tests {
             panic!("Expected SET command");
         }
     }
+
+    #[test]
+    fn test_execute_set_command_with_expiry() {
+        let db = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let command = crate::command::Command::Set(crate::command::SetCommand {
+            key: "key".to_owned(),
+            value: "value".to_owned(),
+            only_if: None,
+            get: false,
+            expiry: Some(crate::command::ExpiryOpt::Seconds(1)),
+        });
+        let resp = command.execute(&db);
+        assert_eq!(db.lock().unwrap().get("key").unwrap().value, "value");
+        assert_eq!(
+            resp,
+            crate::parse::RespElement::SimpleString("OK".to_owned().into())
+        );
+    }
 }
