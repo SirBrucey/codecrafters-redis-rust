@@ -5,10 +5,11 @@ use std::{
 
 use bytes::Bytes;
 
+pub(crate) mod echo;
 pub(crate) mod ping;
 pub(crate) mod set;
 
-use {ping::*, set::*};
+use {echo::*, ping::*, set::*};
 
 use crate::{
     parse::{NullBulkString, RespElement},
@@ -18,7 +19,7 @@ use crate::{
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Command {
     Ping(PingCommand),
-    Echo(String),
+    Echo(EchoCommand),
     Get(String),
     Set(SetCommand),
     GetConfig(Vec<String>),
@@ -54,7 +55,7 @@ impl Command {
     ) -> RespElement {
         match self {
             Self::Ping(ping_cmd) => ping_cmd.execute(db, opts),
-            Self::Echo(message) => RespElement::BulkString(message.into()),
+            Self::Echo(echo_cmd) => echo_cmd.execute(db, opts),
             Self::Get(key) => {
                 let db = db.lock().unwrap();
                 match db.get(&key) {
@@ -125,19 +126,7 @@ impl TryFrom<RespElement> for Command {
                 match command {
                     RespElement::BulkString(command) => match command.as_ref() {
                         "PING" => Ok(Command::Ping(PingCommand)),
-                        "ECHO" => {
-                            if elements.len() != 2 {
-                                return Err(CommandError::InvalidCommand);
-                            }
-
-                            let message = elements[1].clone();
-                            match message {
-                                RespElement::BulkString(message) => {
-                                    Ok(Command::Echo(message.unwrap()))
-                                }
-                                _ => Err(CommandError::InvalidCommand),
-                            }
-                        }
+                        "ECHO" => Ok(EchoCommand::from_resp(elements)?.into()),
                         "GET" => {
                             if elements.len() != 2 {
                                 return Err(CommandError::InvalidCommand);

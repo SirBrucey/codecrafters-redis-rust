@@ -127,6 +127,12 @@ impl BulkString {
     }
 }
 
+impl From<&str> for BulkString {
+    fn from(s: &str) -> Self {
+        BulkString(s.to_owned())
+    }
+}
+
 impl From<String> for BulkString {
     fn from(s: String) -> Self {
         BulkString(s)
