@@ -6,9 +6,10 @@ use std::sync::{Arc, Mutex};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
-mod command;
+mod commands;
 mod parse;
 
+use commands::*;
 use parse::RespSerialise;
 
 #[derive(Debug, Parser)]
@@ -39,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn process(
     mut stream: TcpStream,
-    db: Arc<Mutex<HashMap<String, command::DbValue>>>,
+    db: Arc<Mutex<HashMap<String, DbValue>>>,
     opts: Arc<HashMap<String, OptValue>>,
 ) {
     let mut buf = [0; 512];
@@ -50,7 +51,7 @@ async fn process(
             Ok(_n) => {
                 let (_, elem) = parse::parse_element(&buf).unwrap();
                 dbg!(&elem);
-                let cmd: Result<command::Command, command::CommandError> = elem.try_into();
+                let cmd: Result<Command, CommandError> = elem.try_into();
                 let resp = match cmd {
                     Ok(cmd) => cmd.execute(&db, &opts).serialise(),
                     Err(_e) => {
