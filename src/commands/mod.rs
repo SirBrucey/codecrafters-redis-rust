@@ -5,9 +5,10 @@ use std::{
 
 use bytes::Bytes;
 
+pub(crate) mod ping;
 pub(crate) mod set;
 
-use set::*;
+use {ping::*, set::*};
 
 use crate::{
     parse::{NullBulkString, RespElement},
@@ -16,7 +17,7 @@ use crate::{
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum Command {
-    Ping,
+    Ping(PingCommand),
     Echo(String),
     Get(String),
     Set(SetCommand),
@@ -52,7 +53,7 @@ impl Command {
         opts: &Arc<HashMap<String, OptValue>>,
     ) -> RespElement {
         match self {
-            Self::Ping => RespElement::SimpleString("PONG".to_owned().into()),
+            Self::Ping(ping_cmd) => ping_cmd.execute(db, opts),
             Self::Echo(message) => RespElement::BulkString(message.into()),
             Self::Get(key) => {
                 let db = db.lock().unwrap();
@@ -123,7 +124,7 @@ impl TryFrom<RespElement> for Command {
                 let command = &elements[0];
                 match command {
                     RespElement::BulkString(command) => match command.as_ref() {
-                        "PING" => Ok(Command::Ping),
+                        "PING" => Ok(Command::Ping(PingCommand)),
                         "ECHO" => {
                             if elements.len() != 2 {
                                 return Err(CommandError::InvalidCommand);
